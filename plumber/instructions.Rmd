@@ -1,0 +1,71 @@
+---
+title: "instructions"
+output: html_document
+---
+
+```{r setID}
+myUserId <- 110 # Put in your own!
+```
+
+To run the plumber API, run:
+
+```{r endpoint}
+endpoint <- '/hello' # or try '/__swagger__/'
+```
+
+```{r run}
+p <- plumber::plumb('plumber.R')
+port <- myUserId + 1000
+rstudioapi::viewer(paste0('http://localhost:',port, endpoint))
+p$run(host = "0.0.0.0", port = port)
+```
+
+
+Now open the "Viewer Tab" and click refresh.
+
+Anytime you want to change the code, rinse and repeat.
+
+
+
+# Answers
+
+Don't peak ahead! (See questions in plumber.R)
+
+![](https://cdn.meme.am/cache/instances/folder620/66287620.jpg)
+
+
+![](https://s-media-cache-ak0.pinimg.com/originals/c0/72/53/c07253c6c8f81b63c1d9b0366a91ef97.jpg)
+
+
+```{r sqrit-soln}
+#* @get /sqrit
+#* @num:numeric number to square
+function(num) {
+  as.numeric(num)^2
+}
+
+```
+
+
+```{r sqrit-vector-soln}
+#* @get /sqrit
+#* @param input string representing JSON key-value pair where the key is a JSON array, e.g. '{"input": "[1,2,3]"}'
+#* @response 200 the input values squared as a json array, e.g. [1,4,9]
+function(input) {
+  input <- jsonlite::fromJSON(input)
+  vec <- jsonlite::fromJSON(input$input)
+  vec^2
+}
+```
+
+
+
+
+
+
+
+
+
+
+
+

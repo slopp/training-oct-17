@@ -1,0 +1,195 @@
+---
+title: "3 Ways to Query Data"
+output: html_notebook
+---
+
+You can query databases in with three methods:
+
+* Pass through queries to DBI
+* dplyr translation
+* SQL code engines in R Markdown
+
+# Setup
+
+Load packages and create a generic plot function.
+
+```{r}
+library(tidyverse)
+library(DBI)
+
+plotFunction <- function(dat){
+  ggplot(dat, aes(total, subscribe, color = year)) +
+  geom_point() +
+  xlab("Total contacts") +
+  ylab("Term Deposit Subscriptions") +
+  ggtitle("Contact volume")
+}
+```
+
+# Connect
+
+There are a few ways to connect to databases:
+
+1. Connect to your database using a Data Source Name (DSN). 
+
+
+```{bash}
+cat /etc/odbc.ini
+```
+
+Navigate to "Connections Pane" -> "New Connection" -> "Banks"
+
+The Connections Pane creates a code snippet that generates the connection. Connect to the "Flights" DSN.
+
+*ANSWER*
+
+```{r connection_dsn}
+library(odbc)
+con <- dbConnect(odbc::odbc(), "Banks")
+```
+
+Use the new RStudio object explorer to learn more about the `con` object. What version of the database are we using?
+
+*ANSWER* 
+
+```{r }
+con@info[["db.version"]]
+
+# OR
+
+dbGetInfo(con)
+```
+
+2. Create a connection via arguments to the `dbConnect` function.
+
+Try to Connect directly by filling out this template:
+
+```{r connection, eval=FALSE}
+con <- dbConnect(odbc::odbc(), 
+        driver =    ,
+        server =    ,
+        uid =       ,
+        pwd =       ,
+        port =      ,
+        database = 
+)
+```
+
+
+
+You can also use the New Connection dialog under the RStudio Connections pane to create this type of connection. Navigate:
+
+"Connections Pane" -> "New Connection" -> "SQLServer"
+
+Bonus Question: Where does `Driver: SQLServer` get resolved?
+
+*ANSWER*
+
+```{bash}
+cat /etc/odbcinst.ini
+```
+
+**Passwords**
+
+- Store them in DSN or config files
+- Store them in encrypted keychains
+- Ask for them 
+
+```{bash}
+pwd <- rstudioapi::askForPassword('Enter Password: ')
+```
+
+
+# DBI
+
+Query your database using pass through SQL code to DBI.
+
+```{r}
+bank <- dbReadTable(con, "public.airport")
+
+bank
+
+bank_agg <- dbGetQuery(con,
+"
+select month_idx, year, month,
+sum(case when term_deposit = 'yes' then 1.0 else 0.0 end) as subscribe,
+count(*) as total
+from bank
+group by month_idx, year, month
+")
+
+bank_agg
+
+plotFunction(bank_agg)
+```
+
+# dplyr
+
+Query your database with dplyr code that gets translated to SQL.
+
+```{r}
+bank_tbl <- tbl(con, "bank")
+
+# Challenge: Can you re-create the same query above with dplyr? 
+```
+
+*ANSWER* 
+
+```{r}
+
+bank_agg_tbl <- bank_tbl %>%
+  group_by(month_idx, year, month) %>%
+  summarise(
+    subscribe = sum(ifelse(term_deposit == "yes", 1, 0)),
+    total = n()
+  ) %>% 
+
+bank_agg_tbl  %>%   collect()
+```
+
+It is actually easier to go the other way:
+
+```{r}
+show_query(bank_agg_tbl)
+```
+
+What does `collect` do? (Hint: What kind of object is `bank_agg_tbl`?)
+
+```{r}
+collect(bank_agg_tbl) %>%
+  plotFunction(.)
+```
+
+# SQL
+
+Query your database with pass through SQL in R Markdown. If you want to output the query to file use `output.var = "bank_agg_tbl2"`.
+
+```{sql, connection=con}
+select month_idx, year, month,
+sum(case when term_deposit = 'yes' then 1.0 else 0.0 end) as subscribe,
+count(*) as total
+from bank
+group by month_idx, year, month
+```
+
+```{sql, connection=con, output.var = "bank_agg_tbl2"}
+select month_idx, year, month,
+sum(case when term_deposit = 'yes' then 1.0 else 0.0 end) as subscribe,
+count(*) as total
+from bank
+group by month_idx, year, month
+```
+
+```{r}
+plotFunction(bank_agg_tbl2)
+```
+
+
+**Bonus** Can I go the other way? (Can I use a variable in R in my SQL code chunk?)
+
+Answer: http://rmarkdown.rstudio.com/authoring_knitr_engines.html#sql
+
+# Conclusion
+
+You can use R Markdown, dplyr, DBI, and the RStudio connection pane to interact with your databases. For more information see [db.rstudio.com](http://db.rstudio.com).
+

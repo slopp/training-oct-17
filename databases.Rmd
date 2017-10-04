@@ -105,7 +105,7 @@ pwd <- rstudioapi::askForPassword('Enter Password: ')
 Query your database using pass through SQL code to DBI.
 
 ```{r}
-bank <- dbReadTable(con, "public.airport")
+bank <- dbReadTable(con, "bank")
 
 bank
 
@@ -142,7 +142,7 @@ bank_agg_tbl <- bank_tbl %>%
   summarise(
     subscribe = sum(ifelse(term_deposit == "yes", 1, 0)),
     total = n()
-  ) %>% 
+  )
 
 bank_agg_tbl  %>%   collect()
 ```

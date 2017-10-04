@@ -2,3 +2,368 @@
 title: "sparklyr.Rmd"
 output: html_document
 ---
+
+# Part 1: SQL 
+
+Just like we did with databases, use dplyr syntax to write Apache Spark SQL queries. Use select, where, group by, joins, and window functions in Aparche Spark SQL.
+
+## Setup
+
+```{r setup}
+library(sparklyr)
+library(dplyr)
+library(dbplyr)
+library(babynames)
+library(ggplot2)
+library(dygraphs)
+library(rbokeh)
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+```
+
+## Connect to Spark
+
+Install and connect to a local Spark instance. Copy data into Spark DataFrames.
+
+```{r, eval=FALSE}
+sc <- spark_connect(master = "local", version = "2.1.0")
+babynames_tbl <- copy_to(sc, babynames, "babynames")
+applicants_tbl <- copy_to(sc, applicants, "applicants")
+```
+
+## Total US births
+
+Plot total US births recorded from the Social Security Administration.
+
+```{r, fig.height=5, fig.width=12}
+birthsYearly_tbl <- applicants_tbl %>%
+  mutate(male = ifelse(sex == "M", n_all, 0), female = ifelse(sex == "F", n_all, 0)) %>%
+  group_by(year) %>%
+  summarize(Male = sum(male) / 1000000, Female = sum(female) / 1000000) %>%
+  arrange(year)
+
+sql_render(birthsYearly_tbl) # HQL with case statements and 'temp' tables
+sdf_register(birthsYearly_tbl, "birthsYearly") # Register 'temp' tables
+birthsYearly <- collect(birthsYearly_tbl) # collect for visualization
+birthsYearly # datatable view
+
+birthsYearly %>%
+  dygraph(main = "Total US Births (SSN)", ylab = "Millions") %>%
+  dySeries("Female") %>%
+  dySeries("Male") %>%
+  dyOptions(stackedGraph = TRUE) %>%
+  dyRangeSelector(height = 20)
+```
+
+## Aggregate data by name and year
+
+Use Spark SQL to create a look up table. Register and cache the look up table in Spark for future queries.
+
+```{r}
+# names with at least 1000 births
+topNames_tbl <- babynames_tbl %>%
+  filter(year >= 1986) %>%  
+  group_by(name, sex) %>%
+  summarize(count = as.numeric(sum(n))) %>%
+  filter(count > 1000) %>%
+  select(name, sex)
+
+# names since 1986
+filteredNames_tbl <- babynames_tbl %>%
+  filter(year >= 1986) %>%
+  inner_join(topNames_tbl) # inner (self) join
+
+# aggregate by year, name, sex
+yearlyNames_tbl <- filteredNames_tbl %>%
+  group_by(year, name, sex) %>%
+  summarize(count = as.numeric(sum(n)))
+
+# register table for future queries
+sdf_register(yearlyNames_tbl, "yearlyNames")
+tbl_cache(sc, "yearlyNames") # cache into Spark memory (see sparkUI)
+```
+
+## Most popular names (1986)
+
+Identify the top 5 male and female names from 1986. Visualize the popularity trend over time.
+
+```{r, fig.height=5, fig.width=12}
+# top 4 names by sex
+topNames1986_tbl <- yearlyNames_tbl %>%
+  filter(year == 1986) %>%
+  group_by(name, sex) %>%
+  summarize(count = sum(count)) %>%
+  group_by(sex) %>%
+  mutate(rank = min_rank(desc(count))) %>%
+  filter(rank < 5) %>%
+  arrange(sex, rank) %>%
+  select(name, sex, rank) %>%
+  sdf_register("topNames1986")
+
+tbl_cache(sc, "topNames1986")
+
+topNames1986Yearly <- yearlyNames_tbl %>%
+  inner_join(select(topNames1986_tbl, sex, name)) %>%
+  collect
+
+ggplot(topNames1986Yearly, aes(year, count, color=name)) +
+  facet_grid(~sex) +
+  geom_line() +
+  ggtitle("Most Popular Names of 1986")
+```
+
+
+# Part 2 - ML
+
+In addition to SQL, we can also push out some ML computations into spark.
+
+
+ID | Function | Description | AUC Rank | Run time Rank
+---|---------|-------------|----------|-------------
+1 | Random forest | [ml_random_forest](http://spark.rstudio.com/reference/sparklyr/latest/ml_random_forest.html) | 1 | 3
+2 | Decision tree | [ml_decision_tree](http://spark.rstudio.com/reference/sparklyr/latest/ml_decision_tree.html) | 2 | 2
+3 | Gradient boosted tree | [ml_gradient_boosted_trees](http://spark.rstudio.com/reference/sparklyr/latest/ml_gradient_boosted_trees.html) | 3 | 6 
+4 | Logistic regression | [ml_logistic_regression](http://spark.rstudio.com/reference/sparklyr/latest/ml_logistic_regression.html) | 4 | 4
+5 | Multilayer perceptron (neural net) | [ml_multilayer_perceptron](http://spark.rstudio.com/reference/sparklyr/latest/ml_multilayer_perceptron.html) | 5 | 5
+6 | Naive Bayes | [ml_naive_bayes](http://spark.rstudio.com/reference/sparklyr/latest/ml_naive_bayes.html) | 6 | 1
+
+
+
+
+```{r parquet, eval=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+# Convert titanic_train data into parquet format and output to disk
+library(titanic)
+titanic_tbl <- copy_to(sc, titanic::titanic_train, 'titanic', overwrite = TRUE)
+```
+
+
+## Tidy the data
+
+Tidy the data in preparation for model fitting. `sparkyr` uses `dplyr` syntax when connecting to the Spark SQL API and specific functions functions for connecting to the Spark ML API. 
+
+### Spark SQL transforms
+
+Use feature transforms with Spark SQL. Create new features and modify existing features with `dplyr` syntax.
+
+ID  | Feature | Action
+----|---------|-----------
+1 | Family_Size | Create number of siblings and parents
+2 | Pclass | Format passenger class as character not numeric
+3 | Embarked | Remove a small number of missing records
+4 | Age | Impute missing age with average age
+
+```{r sparkSQL}
+# Transform features with Spark SQL API
+titanic2_tbl <- titanic_tbl %>% 
+  mutate(Family_Size = SibSp + Parch + 1L) %>% 
+  mutate(Pclass = as.character(Pclass)) %>%
+  filter(!is.na(Embarked)) %>%
+  mutate(Age = if_else(is.na(Age), mean(Age), Age)) %>%
+  sdf_register("titanic2")
+```
+
+> Tip: `sdf_register` is used to save our table for later analysis.
+
+
+### Spark ML transforms
+
+Use feature transforms with Spark ML. Use `ft_bucketizer` to bucket family sizes into groups.
+
+```{r sparkFT}
+# Transform family size with Spark ML API
+titanic_final_tbl <- titanic2_tbl %>%
+  mutate(Family_Size = as.numeric(Family_size)) %>%
+  sdf_mutate(
+    Family_Sizes = ft_bucketizer(Family_Size, splits = c(1,2,5,12))
+    ) %>%
+  mutate(Family_Sizes = as.character(as.integer(Family_Sizes))) %>%
+  sdf_register("titanic_final")
+```
+
+> Tip: You can use magrittr pipes to chain dplyr commands with sparklyr commands. For example, `mutate` is a dplyr command that accesses the Spark SQL API whereas `sdf_mutate` is a sparklyr command that accesses the Spark ML API.
+
+### Train-validation split
+
+Randomly partition the data into train and test sets.
+
+```{r partition}
+# Partition the data
+partition <- titanic_final_tbl %>% 
+  mutate(Survived = as.numeric(Survived), SibSp = as.numeric(SibSp), Parch = as.numeric(Parch)) %>%
+  select(Survived, Pclass, Sex, Age, SibSp, Parch, Fare, Embarked, Family_Sizes) %>%
+  sdf_partition(train = 0.75, test = 0.25, seed = 8585)
+
+# Create table references
+train_tbl <- partition$train
+test_tbl <- partition$test
+```
+
+> Tip: Use `sdf_partition` to create training and testing splits.
+
+
+## Train the models
+
+Train multiple machine learning algorithms on the training data. Score the test data with the fitted models.
+
+### Logistic regression
+
+Logistic regression is one of the most common classifiers. Train the logistic regression and examine the predictors.
+
+```{r train}
+# Model survival as a function of several predictors
+ml_formula <- formula(Survived ~ Pclass + Sex + Age + SibSp + Parch + Fare + Embarked + Family_Sizes)
+
+# Train a logistic regression model
+(ml_log <- ml_logistic_regression(train_tbl, ml_formula))
+```
+
+### Other ML algorithms
+
+Run the same formula using the other machine learning algorithms. Notice that training times vary greatly between methods.
+
+```{r ml}
+## Decision Tree
+ml_dt <- ml_decision_tree(train_tbl, ml_formula)
+
+## Random Forest
+ml_rf <- ml_random_forest(train_tbl, ml_formula)
+
+## Gradient Boosted Tree
+ml_gbt <- ml_gradient_boosted_trees(train_tbl, ml_formula)
+
+## Naive Bayes
+ml_nb <- ml_naive_bayes(train_tbl, ml_formula)
+
+## Neural Network
+ml_nn <- ml_multilayer_perceptron(train_tbl, ml_formula, layers = c(11,15,2))
+```
+
+### Validation data
+
+Score the test data with the trained models.
+
+```{r score}
+# Bundle the modelss into a single list object
+ml_models <- list(
+  "Logistic" = ml_log,
+  "Decision Tree" = ml_dt,
+  "Random Forest" = ml_rf,
+  "Gradient Boosted Trees" = ml_gbt,
+  "Naive Bayes" = ml_nb,
+  "Neural Net" = ml_nn
+)
+
+# Create a function for scoring
+score_test_data <- function(model, data=test_tbl){
+  pred <- sdf_predict(model, data)
+  select(pred, Survived, prediction)
+}
+
+# Score all the models
+ml_score <- lapply(ml_models, score_test_data)
+```
+
+***
+
+## Compare results
+
+Compare the model results. Examine performance metrics: lift, AUC, and accuracy. Also examine feature importance to see what features are most predictive of survival.
+
+### Model lift
+
+Lift compares how well the model predicts survival compared to random guessing. Use the function below to estimate model lift for each scored decile in the test data. The lift chart suggests that the tree models (random forest, gradient boosted trees, or the decision tree) will provide the best prediction.
+
+
+```{r lift}
+# Lift function
+calculate_lift <- function(scored_data) {
+  scored_data %>%
+    mutate(bin = ntile(desc(prediction), 10)) %>% 
+    group_by(bin) %>% 
+    summarize(count = sum(Survived)) %>% 
+    mutate(prop = count / sum(count)) %>% 
+    arrange(bin) %>% 
+    mutate(prop = cumsum(prop)) %>% 
+    select(-count) %>% 
+    collect() %>% 
+    as.data.frame()
+}
+
+# Initialize results
+ml_gains <- data.frame(bin = 1:10, prop = seq(0, 1, len = 10), model = "Base")
+
+# Calculate lift
+for(i in names(ml_score)){
+  ml_gains <- ml_score[[i]] %>%
+    calculate_lift %>%
+    mutate(model = i) %>%
+    rbind(ml_gains, .)
+}
+
+# Plot results
+ggplot(ml_gains, aes(x = bin, y = prop, colour = model)) +
+  geom_point() + geom_line() +
+  ggtitle("Lift Chart for Predicting Survival - Test Data Set") + 
+  xlab("") + ylab("")
+```
+
+> Tip: `dplyr` and `sparklyr` both support windows functions, including `ntiles` and `cumsum`.
+
+
+### AUC and accuracy
+
+Though ROC curves are not available, Spark ML does have support for Area Under the ROC curve. This metric captures performance for specific cut-off values. The higher the AUC the better.
+
+```{r auc}
+# Function for calculating accuracy
+calc_accuracy <- function(data, cutpoint = 0.5){
+  data %>% 
+    mutate(prediction = if_else(prediction > cutpoint, 1.0, 0.0)) %>%
+    ml_classification_eval("prediction", "Survived", "accuracy")
+}
+
+# Calculate AUC and accuracy
+perf_metrics <- data.frame(
+  model = names(ml_score),
+  AUC = 100 * sapply(ml_score, ml_binary_classification_eval, "Survived", "prediction"),
+  Accuracy = 100 * sapply(ml_score, calc_accuracy),
+  row.names = NULL, stringsAsFactors = FALSE)
+
+# Plot results
+gather(perf_metrics, metric, value, AUC, Accuracy) %>%
+  ggplot(aes(reorder(model, value), value, fill = metric)) + 
+  geom_bar(stat = "identity", position = "dodge") + 
+  coord_flip() +
+  xlab("") +
+  ylab("Percent") +
+  ggtitle("Performance Metrics")
+```
+
+
+### Feature importance
+
+It is also interesting to compare the features that were identified by each model as being important predictors for survival. The logistic regression and tree models implement feature importance metrics. Sex, fare, and age are some of the most important features.
+
+```{r importance, warning = FALSE}
+# Initialize results
+feature_importance <- data.frame()
+
+# Calculate feature importance
+for(i in c("Decision Tree", "Random Forest", "Gradient Boosted Trees")){
+  feature_importance <- ml_tree_feature_importance(sc, ml_models[[i]]) %>%
+    mutate(Model = i) %>%
+    mutate(importance = as.numeric(levels(importance))[importance]) %>%
+    mutate(feature = as.character(feature)) %>%
+    rbind(feature_importance, .)
+}
+
+# Plot results
+feature_importance %>%
+  ggplot(aes(reorder(feature, importance), importance, fill = Model)) + 
+  facet_wrap(~Model) +
+  geom_bar(stat = "identity") + 
+  coord_flip() +
+  xlab("") +
+  ggtitle("Feature Importance")
+```
+
+

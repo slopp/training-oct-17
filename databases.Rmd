@@ -95,7 +95,7 @@ cat /etc/odbcinst.ini
 - Store them in encrypted keychains
 - Ask for them 
 
-```{bash}
+```{bash eval = FALSE}
 pwd <- rstudioapi::askForPassword('Enter Password: ')
 ```
 

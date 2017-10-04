@@ -2,3 +2,65 @@
 title: "instructions"
 output: html_document
 ---
+
+First we need to setup the  `shinytest` package and a tool called `phantomJS`:
+
+```{r setup]}
+library(shinytest)
+webdriver::install_phantomjs()
+```
+
+To run a test,  use:
+
+```{r recordtest}
+recordTest()
+```
+
+The result is a `tests` folder:
+
+```{bash}
+tree .
+```
+
+The recorder captured your actions against the application in the test file:
+
+```{bash}
+cat tests/mytest.R
+```
+
+The recorder also captured the expected results for those actions:
+
+```{bash}
+cat tests/mytest-expected/001.json
+```
+
+![](tests/mytest-expected/001.png)
+
+To run the app against the test, use:
+
+```{r runtest}
+testApp()
+```
+
+## Exercises
+
+1. Change the application code (somnething minor like updating the title field.) Run `testApp()` again. What happens?
+
+
+2. Modify the test file `tests/mytest.R` so that the test updates the `type` dropdown to `unempl`. What does the test do now?
+
+**Hint**:
+
+```
+app <- ShinyDriver$new("../")
+app$snapshotInit("mytest")
+
+app$setInputs(type = "unempl")
+app$snapshot()
+app$setInputs(smoother = TRUE)
+app$setInputs(f = 0.24)
+```
+
+3. Re-record a test, but use the snapshot button more than once. What is different in the `tests` file?
+
+

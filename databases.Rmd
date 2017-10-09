@@ -32,16 +32,15 @@ There are a few ways to connect to databases:
 
 1. Connect to your database using a Data Source Name (DSN). 
 
+Navigate to "Connections Pane" -> "New Connection" -> "Banks"
+
+The Connections Pane creates a code snippet that generates the connection. Connect to the "Banks" DSN.
+
 
 ```{bash}
 cat /etc/odbc.ini
 ```
 
-Navigate to "Connections Pane" -> "New Connection" -> "Banks"
-
-The Connections Pane creates a code snippet that generates the connection. Connect to the "Flights" DSN.
-
-*ANSWER*
 
 ```{r connection_dsn}
 library(odbc)
